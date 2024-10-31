@@ -115,14 +115,21 @@ class RasterSchema(DataArraySchema):
             3D) labels. If you have a 2D image with shape yx, you can use :func:`numpy.expand_dims` (or an equivalent
             function) to add a channel dimension.
         dims
-            Dimensions of the data.
+            Dimensions of the data (e.g. ['c', 'y', 'x'] for 2D image data). If the data is a :class:`xarray.DataArray`,
+            the dimensions can also be inferred from the data. If the dimensions are not in the order (c)(z)yx, the data
+            will be transposed to match the order.
         transformations
-            Transformations to apply to the data.
+            Dictionary of transformations to apply to the data. The key is the name of the target coordinate system,
+            the value is the transformation to apply. By default, a single `Identity` transformation mapping to the
+            `"global"` coordinate system is applied.
         scale_factors
-            Scale factors to apply for multiscale.
-            If not None, a :class:`xarray.DataArray` is returned.
+            Scale factors to apply to construct a multiscale image (:class:`datatree.DataTree`).
+            If `None`, a :class:`xarray.DataArray` is returned instead.
+            Importantly, each scale factor is relative to the previous scale factor. For example, if the scale factors
+            are `[2, 2, 2]`, the returned multiscale image will have 4 scales. The original image and then the 2x, 4x
+            and 8x downsampled images.
         method
-            Method to use for multiscale.
+            Method to use for multiscale downsampling. Please refer to :class:`multiscale_spatial_image.to_multiscale`.
         chunks
             Chunks to use for dask array.
         kwargs
@@ -132,8 +139,18 @@ class RasterSchema(DataArraySchema):
 
         Returns
         -------
-        :class:`xarray.DataArray` or
-        :class:`datatree.DataTree`.
+        :class:`xarray.DataArray` or :class:`datatree.DataTree`
+
+        Notes
+        -----
+        **RGB images**
+
+        If you have an image with 3 or 4 channels and you want to interpret it as an RGB or RGB(A) image, you can use
+        the `c_coords` argument to specify the channel coordinates as `["r", "g", "b"]` or `["r", "g", "b", "a"]`.
+
+        You can also pass the `rgb` argument to `kwargs` to automatically set the `c_coords` to `["r", "g", "b"]`.
+        Please refer to :func:`to_spatial_image` for more information. Note: if you set `rgb=None` in `kwargs`, 3-4
+        channel images will be interpreted automatically as RGB(A) images.
         """
         if transformations:
             transformations = transformations.copy()
@@ -234,8 +251,8 @@ class RasterSchema(DataArraySchema):
             if j != k:
                 raise ValueError(f"Wrong key for multiscale data, found: `{j}`, expected: `{k}`.")
         name = {list(data[i].data_vars.keys())[0] for i in data}
-        if len(name) > 1:
-            raise ValueError(f"Wrong name for datatree: `{name}`.")
+        if len(name) != 1:
+            raise ValueError(f"Expected exactly one data variable for the datatree: found `{name}`.")
         name = list(name)[0]
         for d in data:
             super().validate(data[d][name])
@@ -255,6 +272,17 @@ class Labels2DModel(RasterSchema):
             **kwargs,
         )
 
+    @classmethod
+    def parse(  # noqa: D102
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> DataArray | DataTree:
+        if kwargs.get("scale_factors") is not None and kwargs.get("method") is None:
+            # Override default scaling method to preserve labels
+            kwargs["method"] = Methods.DASK_IMAGE_NEAREST
+        return super().parse(*args, **kwargs)
+
 
 class Labels3DModel(RasterSchema):
     dims = DimsSchema((Z, Y, X))
@@ -269,6 +297,13 @@ class Labels3DModel(RasterSchema):
             *args,
             **kwargs,
         )
+
+    @classmethod
+    def parse(self, *args: Any, **kwargs: Any) -> DataArray | DataTree:  # noqa: D102
+        if kwargs.get("scale_factors") is not None and kwargs.get("method") is None:
+            # Override default scaling method to preserve labels
+            kwargs["method"] = Methods.DASK_IMAGE_NEAREST
+        return super().parse(*args, **kwargs)
 
 
 class Image2DModel(RasterSchema):
